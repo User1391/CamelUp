@@ -44,8 +44,15 @@ class GameState:
             self.free_dice = set(Camel)
 
         # per‐instance free_cards, if you ever use them
-        self.free_cards = list(free_cards) if free_cards is not None else [] 
-    
+        if free_cards is not None:
+            self.free_cards = free_cards
+        else:
+            self.free_cards = set()
+            for camel in Camel:
+                for bet in Bet:
+                    self.free_cards.add((camel, bet))
+
+
     def print_board(self):
         """Prints the board state as-is"""
         print(self.board) 
@@ -65,6 +72,14 @@ class GameState:
                         self.token_board[space]  = token
                         return True
         return False
+
+    def take_leg_card(self, camel, bet):
+        """Plays the specified leg bet card thereby removing it from the game. Returns True upon success and False if the card was missing"""
+        if (camel, bet) in self.free_cards:
+            self.free_cards.remove((camel, bet))
+            return True
+        else:
+            return False
 
     def eval_game_state(self):
         """Return an ordered list of the camels, from first to fifth for the round."""
@@ -183,8 +198,7 @@ class GameState:
         """Returns a dictionary using key (Camel, Bet) and value type float representing the EV in chips calculated using Monte Carlo evaluation"""
         eval = self.monte_carlo_eval_raw(iterations)
         output = {}
-        for camel in Camel:
-            for bet in Bet:
+        for camel, bet in self.free_cards:
                 output[(camel, bet)] = bet.value * eval[camel][0] + eval[camel][1] - eval[camel][2]
             
         return output
@@ -208,5 +222,41 @@ class GameState:
 
         return outcome
         
-        
+    def best_move(self):
+        """Runs the Monte Carlo sims for tokens and leg bets and determines the best move to make.
+        Returns either
+            ("leg_bet", Camel, Bet, ev)
+        or
+            ("token", space_index, Token, ev)
+        or
+            Roll Die  # if all EVs ≤ 1
+        """
+        # 1) run your two sims
+        leg_ev   = self.leg_bet_ev_mc()
+        token_ev = self.token_ev_mc()
 
+        # 2) find the best single leg bet
+        (best_camel, best_bet), best_leg_ev = max(leg_ev.items(), key=lambda kv: kv[1])
+        # 3) find the best single token placement
+        (best_space, best_tok), best_tok_ev = max(token_ev.items(), key=lambda kv: kv[1])
+
+        # 4) if neither is positive, roll die
+        if best_leg_ev <= 1 and best_tok_ev <= 1:
+            return ("roll_die")
+
+        # 5) pick the higher‐EV move
+        if best_leg_ev >= best_tok_ev:
+            return ("leg_bet", best_camel, best_bet, best_leg_ev)
+        else:
+            return ("token", best_space, best_tok, best_tok_ev)
+    
+    def choose_move(self):
+        move = self.best_move()
+        if move[0] == "roll_die":
+            print("Roll the die and get your coin.")
+        elif move[0] == "leg_bet":
+            _, camel, bet, ev = move
+            print(f"Place a leg bet of {bet.name} on {camel.name} (EV={ev:.3f})")
+        else:
+            _, space, tok, ev = move
+            print(f"Place a {tok.name} token on space {space} (EV={ev:.3f})") 
