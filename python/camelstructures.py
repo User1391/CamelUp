@@ -1,5 +1,8 @@
 from enum import Enum
 import random
+import copy
+
+TOT_SPACES = 18
 
 class Camel(Enum):
     YELLOW = 1
@@ -18,16 +21,51 @@ class Bet(Enum):
     TWO = 2
 
 class GameState:
-    board = []
-    token_board = []
-    free_dice = {Camel.YELLOW, Camel.ORANGE, Camel.WHITE, Camel.BLUE, Camel.GREEN}
     
     def __init__(self, board_state, token_board=None, free_dice=None, free_cards=None):
-        self.board = board_state
-        if token_board != None: self.token_board = token_board
-        if free_dice != None: self.free_dice = free_dice
-        if free_cards != None: self.free_cards = free_cards 
+        # board_state is presumably a list-of-lists; copy it if you plan to mutate
+        self.board = [list(space) for space in board_state]
+
+        # per‐instance token_board
+        if token_board is not None:
+            self.token_board = list(token_board) + [None] * (TOT_SPACES - len(token_board))
+        else:
+            # default: no tokens on any space
+            self.token_board = [None] * TOT_SPACES
+        
+        # use to track when a camel (or camel stack) lands on a token 
+        self.token_land_count = [0] * TOT_SPACES
+
+        # per‐instance free_dice
+        if free_dice is not None:
+            self.free_dice = set(free_dice)
+        else:
+            # start each new game with all five dice available
+            self.free_dice = set(Camel)
+
+        # per‐instance free_cards, if you ever use them
+        self.free_cards = list(free_cards) if free_cards is not None else [] 
     
+    def print_board(self):
+        """Prints the board state as-is"""
+        print(self.board) 
+
+    def dice_left(self):
+        """Returns the Boolean of if any free dice are remaining to roll"""
+        return len(self.free_dice) > 0
+    
+    def place_token(self, space, token):
+        """Attempts to place the desired token type on a desired space. Returns True if successfull and False if fails"""
+        if space >= len(self.board) or len(self.board[space]) == 0:
+            if space - 1 >= len(self.token_board) or self.token_board[space-1] == None:
+                if space >= len(self.token_board) or self.token_board[space] == None:
+                    if space + 1 >= len(self.token_board) or self.token_board[space+1] == None:
+                        if space >= len(self.token_board):
+                            self.token_board.extend([None] * (space + 1 - len(self.token_board)))
+                        self.token_board[space]  = token
+                        return True
+        return False
+
     def eval_game_state(self):
         """Return an ordered list of the camels, from first to fifth for the round."""
         output_list = []
@@ -55,6 +93,7 @@ class GameState:
 
     def move_camel(self, camel, num_spaces):
         """Move the camel forward the number of desired spaces, while accounting for plus or minus tokens"""
+        camel_stack = None
         for space_idx in range(len(self.board)):
             if len(self.board[space_idx]) != 0:
                 for camel_idx in range(len(self.board[space_idx])):
@@ -63,29 +102,111 @@ class GameState:
                         camel_stack = self.board[space_idx][camel_idx:]
                         # now remove that stack 
                         self.board[space_idx] = self.board[space_idx][:camel_idx]
+                        # print("Camel Stack", camel_stack)
                         break
-            # now, we should check forward to see if a token exists at the spot we want to go
-            new_space_idx = space_idx + num_spaces
-            if new_space_idx >= len(self.token_board):
-                # no token, just create or extend as normal
-                # check if the space we're going to even exists 
-                if new_space_idx >= len(self.board):
-                    self.board.insert(new_space_idx, camel_stack)
-                else:
-                    self.board[new_space_idx].extend(camel_stack)
-            else:
-                # make sure it's not just a blank space 
-                if self.token_board[new_space_idx] == None:
-                    # we know it's blank because camels can never be on the same space as tokens
-                    self.board.insert(new_space_idx, camel_stack)
-                elif self.token_board[new_space_idx] == Token.PLUS:
-                    # do same thing as above but for the next space 
-                    if new_space_idx + 1 >= len(self.board):
-                        self.board[new_space_idx + 1] = camel_stack
+            if camel_stack != None:
+                # now, we should check forward to see if a token exists at the spot we want to go
+                new_space_idx = space_idx + num_spaces
+                if new_space_idx >= len(self.token_board):
+                    # no token, just create or extend as normal
+                    # check if the space we're going to even exists 
+                    if new_space_idx >= len(self.board):
+                        self.board.insert(new_space_idx, camel_stack)
                     else:
-                        self.board[new_space_idx + 1].extend(camel_stack)
+                        self.board[new_space_idx].extend(camel_stack)
                 else:
-                    # we know it's a minus space 
-                    self.board[new_space_idx - 1] = camel_stack + self.board[new_space_idx - 1]
-            break
+                    # make sure it's not just a blank space 
+                    if self.token_board[new_space_idx] == None:
+                        # we know it's blank because camels can never be on the same space as tokens
+                        self.board.insert(new_space_idx, camel_stack)
+                    elif self.token_board[new_space_idx] == Token.PLUS:
+                        self.token_land_count[new_space_idx] += 1
+                        # do same thing as above but for the next space 
+                        if new_space_idx + 1 >= len(self.board):
+                            self.board.insert(new_space_idx + 1, camel_stack)
+                        else:
+                            self.board[new_space_idx + 1].extend(camel_stack)                    
+                    else:
+                        self.token_land_count[new_space_idx] += 1
+                        target = new_space_idx - 1
+
+                        # if you ever land at “space 0” with a minus, push to front
+                        if target < 0:
+                            self.board.insert(0, camel_stack)
+
+                        # if you land beyond the current end, insert there
+                        elif target >= len(self.board):
+                            self.board.insert(target, camel_stack)
+
+                        # otherwise just stack onto the existing space
+                        else:
+                            self.board[target] = camel_stack + self.board[target]
+                break
+
+    def roll(self):
+        """Rolls a random die from the set of remaining dice and moves that respective camel accordingly"""
+        rolled_camel = random.choice(tuple(self.free_dice))
+        self.free_dice.remove(rolled_camel)
+        die_roll = random.randint(1,3)
+        #print("Moved camel " + rolled_camel.name + " for " + str(die_roll) + " spaces.")
+        self.move_camel(rolled_camel, die_roll)
+    
+    def monte_carlo_eval_raw(self, iterations=100000):
+        """Does a Monte Carlo evaluation of the current game state and returns the winning, second, and losing odds for each camel"""
+        first =  {Camel.YELLOW : 0, Camel.ORANGE : 0, Camel.WHITE : 0, Camel.BLUE : 0, Camel.GREEN : 0}
+        second = {Camel.YELLOW : 0, Camel.ORANGE : 0, Camel.WHITE : 0, Camel.BLUE : 0, Camel.GREEN : 0}
+        lose = {Camel.YELLOW : 0, Camel.ORANGE : 0, Camel.WHITE : 0, Camel.BLUE : 0, Camel.GREEN : 0}
+        
+        for i in range(iterations):
+            cpy_game = copy.deepcopy(self)
+            while cpy_game.dice_left():
+                cpy_game.roll()
+                #cpy_game.print_board()
+            outcome = cpy_game.eval_game_state()
+            first[outcome[0]] += 1 
+            second[outcome[1]] += 1 
+            for cam in outcome[2:]:
+                lose[cam] +=1 
+            del cpy_game
+        
+        output = {}
+        for camel in Camel:
+            tot = first[camel] + second[camel] + lose[camel]
+            win_percent = first[camel] / tot 
+            second_percent = second[camel] / tot 
+            lose_percent = lose[camel] / tot 
+            output[camel] = (win_percent, second_percent, lose_percent)
+        
+        return output
+    
+    def leg_bet_ev_mc(self, iterations=100000):
+        """Returns a dictionary using key (Camel, Bet) and value type float representing the EV in chips calculated using Monte Carlo evaluation"""
+        eval = self.monte_carlo_eval_raw(iterations)
+        output = {}
+        for camel in Camel:
+            for bet in Bet:
+                output[(camel, bet)] = bet.value * eval[camel][0] + eval[camel][1] - eval[camel][2]
+            
+        return output
+    
+    def token_ev_mc(self, iterations=1000):
+        """Returns a dict giving the ev as a float for each valid token placement space with the token type (space, Token)"""
+        outcome = {}
+        for space in range(TOT_SPACES):
+            for tok in (Token.MINUS, Token.PLUS):
+                cnt = 0
+                for i in range(iterations):
+                    cpy_game = copy.deepcopy(self)
+                    if cpy_game.place_token(space, tok):
+                        while cpy_game.dice_left():
+                            cpy_game.roll()
+                        cnt += cpy_game.token_land_count[space]
+
+                    del cpy_game
+
+                outcome[(space, tok)] = cnt / iterations
+
+        return outcome
+        
+        
 
